@@ -1,13 +1,18 @@
 
 
+
 fin_script <- function(){
-  source("~/rstudio-workspace/f10/pull_script.R")
-  source("~/rstudio-workspace/f10/pull_script_day.R")
+  source("~/concourse/pull_script.R")
   
   library(dplyr)
+  library(tidyr)
   library(padr)
   library(dplyr.snowflakedb)
+  library(parallel)
+  library(pbmcapply)
+
   options(dplyr.jdbc.classpath = "~/snowflake_jdbc.jar")
+  numCores <- detectCores() # get the number of cores available
   
   
   
@@ -27,11 +32,11 @@ fin_script <- function(){
   
   
   # Insures the table is in snowflake, if not it creates a new one
-  if("CONCOURSE_SELL_SIDE" %in% db_list_tables(my_db$con)){
+  if("CONCOURSE_SELL_SIDE_HAZEN" %in% db_list_tables(my_db$con) && FALSE){
     
     
     # Pull old table
-    df_sf<- tbl(my_db, "CONCOURSE_SELL_SIDE")%>%
+    df_sf<- tbl(my_db, "CONCOURSE_SELL_SIDE_HAZEN")%>%
       data.frame()%>%
       arrange(desc(date))
     
@@ -101,30 +106,25 @@ fin_script <- function(){
   
   # Recreating concourse 3day moving average, runs over all new data. --------------------------------
   
-  source("~/rstudio-workspace/f10/naive_pred.R")
+  
+  
+  
+  
+  
+  source("~/concourse/naive_pred.R")
   pred_date <- new_data_start
   
+ 
   
-  if(exists("df_fin")){
-    rm(df_fin)
-  }
+ 
   
-  
-  while(pred_date<=Sys.Date()){
-    print(paste("date:", pred_date))
-    df_ret <- f10_predictor(df_total_day, pred_date)
-    
-    if(exists("df_fin")){
-      df_fin <- rbind(df_fin, df_ret)
-    }else{
-      df_fin<- df_ret
-    }
-    pred_date<- pred_date +1
-  }
+  mcresults <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
+                        FUN=function(i) f10_predictor(df_total_day, i),
+                        mc.cores = numCores)
+  mcresults <-bind_rows(mcresults)
   
   
-  
-  df_total_day <- merge(df_total_day, df_fin, 
+  df_total_day <- merge(df_total_day, mcresults, 
                         by = c("date","landingContentGroup2", "country", 
                                "deviceCategory", "operatingSystem"), 
                         all = TRUE)%>%
@@ -132,8 +132,6 @@ fin_script <- function(){
                            TRUE~avg.x))%>%
     select(-avg.x, -avg.y)
   
-  rm(df_fin)
-  rm(df_ret)
   
   
   
@@ -148,44 +146,26 @@ fin_script <- function(){
   # 12 day expontialy weighted moving average model over new data ------------------------------------
   
   
-  source("~/rstudio-workspace/f10/day_pred.R")
+  source("~/concourse/day_pred.R")
   pred_date <- new_data_start
   
-  
-  if(exists("df_pred_loop")){
-    rm(df_pred_loop)
-  }
-  
-  while(pred_date<=Sys.Date()){
-    
-    print(paste("date:", pred_date))
-    print("")
-    print("")
-    
-    
-    df_ret <- predictor_day(df_total_day, pred_date)
-    
-    pred_date<- pred_date +1
-    
-    
-    if(exists("df_pred_loop")){
-      df_pred_loop <- rbind(df_pred_loop, df_ret)
-    }else{
-      df_pred_loop<- df_ret
-    }
-  }
+  mcresults <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
+                        FUN=function(i) predictor_day(df_total_day, i),
+                        mc.cores = numCores)
+  mcresults <-bind_rows(mcresults)
   
   
-  df_total_day <- merge(df_total_day, df_pred_loop, 
+ 
+  
+  
+  df_total_day <- merge(df_total_day, mcresults, 
                         by = c("date","landingContentGroup2", 
                                "country", "deviceCategory", "operatingSystem"), 
                         all = TRUE)%>%
     mutate(dpred = case_when(!is.na(dpred.y)~dpred.y,
                              TRUE~dpred.x))%>%
     select(-dpred.x, -dpred.y)
-  rm(df_pred_loop)
-  rm(df_ret)
-  
+
   
   
   
@@ -197,45 +177,22 @@ fin_script <- function(){
   
   
   # Tbats on hourly data -----------------------------------------------------------------------------
+
   
-  
-  
-  
-  source("~/rstudio-workspace/f10/hour_pred.R")
+  source("~/concourse/hour_pred.R")
   
   
   pred_date <- new_data_hour
-  end_date <- Sys.Date()
   total_timer <- Sys.time()
   
   
   
+  lapp_res <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
+                       FUN=function(i) predictor_hour(df_total, i),
+                       mc.cores = numCores,
+                       ignore.interactive = TRUE)
   
-  
-  
-  
-  
-  if(exists("df_pred_loop")){
-    rm(df_pred_loop)
-  }
-  while(pred_date<=end_date){
-    
-    print(paste("date:", pred_date))
-    print("")
-    print("")
-    
-    loop_timer <- Sys.time()
-    df_ret <- predictor_hour(df_total, pred_date)
-    print(Sys.time() - loop_timer)
-    
-    pred_date<- pred_date +1
-    
-    if(exists("df_pred_loop")){
-      df_pred_loop <- rbind(df_pred_loop, df_ret)
-    }else{
-      df_pred_loop<- df_ret
-    }
-  }
+  lapp_res <-bind_rows(lapp_res)
   
   
   
@@ -248,7 +205,7 @@ fin_script <- function(){
   
   
   
-  df_total <- merge(df_total, df_pred_loop, 
+  df_total <- merge(df_total, lapp_res, 
                     by = c("date","timestamp","landingContentGroup2", "country", 
                            "deviceCategory", "operatingSystem"), 
                     all = TRUE)%>%
@@ -257,8 +214,8 @@ fin_script <- function(){
     select(-hpred.x, -hpred.y)
   
   
-  rm(df_pred_loop)
-  rm(df_ret)
+  rm(mcresults)
+  
   
   
   
@@ -271,7 +228,7 @@ fin_script <- function(){
   
   
   df_total <- merge(select(df_total_day, -ses,-rev, -rps), 
-                    df_final, 
+                    df_total, 
                     by = c("date","landingContentGroup2", "country", 
                            "deviceCategory", "operatingSystem"), 
                     all = TRUE)%>%
@@ -291,15 +248,20 @@ fin_script <- function(){
   
   
   
-  copy_to(my_db, df_total, "CONCOURSE_SELL_SIDE", overwrite = TRUE)
+  copy_to(my_db, df_total, "CONCOURSE_SELL_SIDE_HAZEN", overwrite = TRUE)
   
   
   
   
-  print("CONCOURSE_SELL_SIDE")
+  print("CONCOURSE_SELL_SIDE_HAZEN")
   
   return(df_total)
   
   
 }
+
+
+
+
+fin_script()
 

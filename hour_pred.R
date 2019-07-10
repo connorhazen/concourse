@@ -1,5 +1,5 @@
 predictor_hour <- function(df, current_date) {
-  source("~/rstudio-workspace/f10/tbats_hour.R")
+  source("~/concourse/tbats_hour.R")
   library(imputeTS)
   library(forecast) 
   library(xts)
@@ -8,6 +8,10 @@ predictor_hour <- function(df, current_date) {
   library(data.table)
   library(lubridate)
   library(system1)
+  numCores <- detectCores()-1 # get the number of cores available
+  
+  system(paste("echo '\n",current_date,"'"))
+  
   
  
   df_amt <- df%>%
@@ -18,7 +22,7 @@ predictor_hour <- function(df, current_date) {
     filter(ses >= 100)%>%
     group_by(landingContentGroup2, country, deviceCategory, operatingSystem)%>%
     summarise(count = n(), ses = sum(ses, na.rm = TRUE))%>%
-    arrange(desc(ses))
+    arrange(desc(count))
   
   
   
@@ -32,18 +36,10 @@ predictor_hour <- function(df, current_date) {
   
   
   
-  if(exists("df_hour_pred")){
-    rm(df_hour_pred)
-  }
-  
-  for(x in 1:nrow(df_amt)){
+  inner_func_hour <- function(row){
     
     
-    if(x%%100 == 0){
-      print(paste("row:",x))
-    }
-    
-    name1<-df_amt[x,]
+    name1<-df_amt[row,]
     
     df_hour_tbats<-df_check%>%
       filter(landingContentGroup2 == name1$landingContentGroup2 , country == name1$country ,
@@ -78,20 +74,26 @@ predictor_hour <- function(df, current_date) {
         select(date, timestamp, landingContentGroup2, country, deviceCategory, operatingSystem, hpred)
       
       #end pred
-    }
       
-    
-    
-    
-    
-    
-    if(exists("df_hour_pred")){
-      df_hour_pred <- bind_rows(df_hour_pred, df_hour_tbats)
+      
     }
-    else{
-      df_hour_pred <- df_hour_tbats
-    }
+    return(df_hour_tbats)
+    
   }
-  return(df_hour_pred)
+  
+  
+  mcresults <- pbmclapply(1:nrow(df_amt),
+                          FUN=function(i) inner_func_hour(i),
+                          mc.cores = 1,
+                          mc.cleanup = TRUE,
+                          mc.preschedule = FALSE,
+                          ignore.interactive = TRUE)
+  
+
+  mcresults <-bind_rows(mcresults)
+  
+  
+ 
+  return(mcresults)
   
 }

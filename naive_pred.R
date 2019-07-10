@@ -25,10 +25,7 @@ f10_predictor <- function(df, current_date){
   
   for(x in 1:length(df_amt$count)){
     
-    if(x%%100 ==0){
-      print("in f10, on:")
-      print(x)
-    }
+    
     
     name1<-df_amt[x,]
     

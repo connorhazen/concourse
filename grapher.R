@@ -1,4 +1,5 @@
-
+source("~/rstudio-workspace/f10/concourse_hour_backtest_runner.R")
+source("~/rstudio-workspace/packages/mase.R")
 
 df <- f10_hour()
 
@@ -61,7 +62,7 @@ library(lubridate)
 library(ggplot2)
 df_graph <- df_fin%>%
   mutate(resid_f10 = avg - rps)%>%
-  mutate(resid_me = hour_pred - rps)%>%
+  mutate(resid_me = hpred - rps)%>%
   mutate(off_calc_f10 = resid_f10 *ses)%>%
   mutate(off_calc_me = resid_me *ses)%>%
   filter(date>Sys.Date()-20, date < Sys.Date()-7)
@@ -84,9 +85,9 @@ sum(df_graph_day$rev, na.rm = TRUE)
 
 
 df_round <- df_graph%>%
-  mutate(rps = round(rps,2), avg = round(avg,2), hour_pred = round(hour_pred,2))%>%
+  mutate(rps = round(rps,2), avg = round(avg,2), hpred = round(hpred,2))%>%
   mutate(resid_f10 = rps - avg)%>%
-  mutate(resid_me = rps - hour_pred)
+  mutate(resid_me = rps - hpred)
 
 
 
@@ -101,9 +102,10 @@ df_amt2 <- df_round%>%
   arrange(desc(ses),desc(count))
 
 
-num <- 13
+num <- 1
 
 name1 <- as.character(df_amt2[num,])
+
 
 
 df_tester<-df_round%>%
@@ -111,27 +113,28 @@ df_tester<-df_round%>%
            as.character(deviceCategory) == name1[3], as.character(operatingSystem) == name1[4])%>%
   arrange(timestamp)
 
-ggplot(df_tester, aes(x = timestamp))+
-  geom_line(aes(y = rps), size =  1.2, color  = "black")+
-  scale_x_datetime(minor_breaks  = "1 day")+
-  ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50),
-                "\n",name1[2],name1[3],name1[4],  sep = " " ))
-
- 
-ggplot(df_tester, aes(x = timestamp))+
-  geom_line(aes(y = rps, color = "rps"), size =  1.2)+
-  geom_line(aes(y = avg, color = "3day"))+
-  scale_x_datetime(minor_breaks  = "1 day")+
-  scale_colour_manual("",
-                      breaks = c("rps", "3day" ),
-                      values = c("blue", "black" )) +
-  ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50),
-                "\n",name1[2],name1[3],name1[4], "\n", "MAE : ", round(mean(abs(df_tester$resid_f10), na.rm = TRUE),4), sep = " " ))
+# ggplot(df_tester, aes(x = timestamp))+
+#   geom_line(aes(y = rps), size =  1.2, color  = "black")+
+#   scale_x_datetime(minor_breaks  = "1 day")+
+#   ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50),
+#                 "\n",name1[2],name1[3],name1[4],  sep = " " ))
+# 
+# 
+# ggplot(df_tester, aes(x = timestamp))+
+#   geom_line(aes(y = rps, color = "rps"), size =  1.2)+
+#   geom_line(aes(y = avg, color = "3day"))+
+#   scale_x_datetime(minor_breaks  = "1 day")+
+#   scale_colour_manual("",
+#                       breaks = c("rps", "3day" ),
+#                       values = c("blue", "black" )) +
+#   ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50),
+#                 "\n",name1[2],name1[3],name1[4], "\n", "MAE : ", round(mean(abs(df_tester$resid_f10), na.rm = TRUE),4), sep = " " ))
 
 ggplot(df_tester, aes(x = timestamp))+
   geom_line(aes(y = rps, color = "rps"), size =  1.1)+
+  geom_point(aes(y = rps, color = "rps"), size = .6)+
   geom_line(aes(y = avg, color = "3day"))+
-  geom_line(aes(y = hour_pred, color = "pred"))+
+  geom_line(aes(y = hpred, color = "pred"))+
   scale_x_datetime(minor_breaks  = "1 day")+
   scale_colour_manual("", 
                       breaks = c("rps", "3day", "pred"),
@@ -146,13 +149,13 @@ ggplot(df_tester, aes(x = timestamp))+
 #   scale_x_date(minor_breaks  = "1 day")
 
 
-df_round <- df_graph%>%
-  mutate(rps = round(rps,2), avg = round(avg,2), pred = round(pred,2))%>%
-  mutate(resid_f10 = rps - avg)%>%
-  mutate(resid_me = rps - pred)
+# df_round <- df_graph%>%
+#   mutate(rps = round(rps,2), avg = round(avg,2), pred = round(pred,2))%>%
+#   mutate(resid_f10 = rps - avg)%>%
+#   mutate(resid_me = rps - pred)
 
 
-mase(actual = df_tester$rps, predicted = df_tester$pred, step_size = 24)
+# mase(actual = df_tester$rps, predicted = df_tester$pred, step_size = 24)
 
 
 ggplot(df_tester, aes(x = timestamp))+
@@ -176,18 +179,18 @@ for(x in 1:20){
   
   
   if(first){
-    mas_1 <- mase2(df_tester)*sum(df_tester$ses, na.rm = TRUE)
+    mas_1 <- mase1(df_tester)*sum(df_tester$ses, na.rm = TRUE)
     count <- sum(df_tester$ses, na.rm = TRUE)
     first <- FALSE
   }
   else{
-    if(is.na(mase2(df_tester))){
+    if(is.na(mase1(df_tester))){
       next
     }
-    if(is.infinite(mase2(df_tester))){
+    if(is.infinite(mase1(df_tester))){
       next
     }
-    mas_1 <- mas_1 + mase2(df_tester)*sum(df_tester$ses, na.rm = TRUE)
+    mas_1 <- mas_1 + mase1(df_tester)*sum(df_tester$ses, na.rm = TRUE)
     count <- count + sum(df_tester$ses, na.rm = TRUE)
   }
   
@@ -200,9 +203,9 @@ for(x in 1:20){
 }
 
 print(mas_1/count)
-mase1(df_graph)
+mase2(df_graph)
 
-mase1(df_round)
+mase2(df_round)
 
 
 

@@ -1,7 +1,7 @@
 pull_script <- function(days){
   library(gsheet)
   library(dplyr)
-  source("~/rstudio-workspace/f10/dataPull.R")
+  source("~/concourse/dataPull.R")
   
   
   end.date <- as.character(Sys.Date()-1)

@@ -8,7 +8,7 @@ pull <- function(start.date_inp, end.date_inp, dimensions_inp, metrics_inp, filt
   trys<-0
   while(!exists("service_token")&trys <4){
     trys<-trys+1
-    try(service_token <- gar_auth_service(json_file="~/Desktop/Service_client.json"), silent = TRUE   )
+    try(service_token <- gar_auth_service(json_file="~/Service_client.json"), silent = TRUE   )
   }
   trys<-0
   if(exists("view_id_list")){

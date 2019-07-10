@@ -59,11 +59,16 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
                         rep(placeholder, forecast))
     return(predf)
     
-    
-    
   }
   
-    diff
+  
+  if(difftime( max(df$timestamp, na.rm = TRUE) , min(df$timestamp, na.rm = TRUE), units = c("hours")) < frequency[1] *4){
+    predf <- data.frame(timestamp = seq(from = as.POSIXct(current_date+1),
+                                        by = interval,
+                                        length.out = forecast),
+                        rep(placeholder, forecast))
+    return(predf)
+  }
   ## remove values with low weights
   df <- df[weight > minweight] # nolint
   
@@ -199,12 +204,12 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
   }
   
   ## make sure we fail the model on low number of (unique) observations
-  if (nrow(na.omit(tsobj)) < frequency[1] | length(unique(na.omit(tsobj))) < 3) {
+  if (nrow(na.omit(tsobj)) < frequency[1] | length(unique(na.omit(tsobj))) < 3 ) {
     model <- structure(
       list(message = "failing on low number of observations"),
       class = 'error')
   }
-  
+   
 
   if (!inherits(model, 'error')) {
     

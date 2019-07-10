@@ -1,5 +1,6 @@
 predictor_day <- function(df, current_date) {
 
+  
   df_test <- df%>%
     filter(date<=current_date)%>%
     filter(date>current_date-3)
@@ -24,9 +25,7 @@ predictor_day <- function(df, current_date) {
   for(x in 1:nrow(df_amt)){
     
     
-    if(x%%100 == 0){
-      print(paste("row:",x))
-    }
+    
     
     name1<-df_amt[x,]
     
