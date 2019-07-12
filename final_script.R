@@ -22,7 +22,7 @@ fin_script <- function(){
   
   # Connection to Snowflake database
   
-  my_db <- src_snowflakedb(user = "CONNOR_HAZEN",password = "FFg-nvU-83U-nYh", account = "system1",
+  my_db <- src_snowflakedb(user = "CONNOR_HAZEN",password = *, account = "system1",
                            opts = list(warehouse = "S1_DS", db = "DATA_SCIENCE",schema = "CONCOURSE"))
   
   
@@ -38,6 +38,7 @@ fin_script <- function(){
     # Pull old table
     df_sf<- tbl(my_db, "CONCOURSE_SELL_SIDE_HAZEN")%>%
       data.frame()%>%
+      mutate(date = as.Date(date), timestamp=as.POSIXct(timestamp))%>%
       arrange(desc(date))
     
     new_data_start <- df_sf$date[1]
@@ -120,7 +121,7 @@ fin_script <- function(){
   
   mcresults <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
                         FUN=function(i) f10_predictor(df_total_day, i),
-                        mc.cores = numCores)
+                        mc.cores = numCores-1)
   mcresults <-bind_rows(mcresults)
   
   
@@ -151,7 +152,7 @@ fin_script <- function(){
   
   mcresults <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
                         FUN=function(i) predictor_day(df_total_day, i),
-                        mc.cores = numCores)
+                        mc.cores = numCores-1)
   mcresults <-bind_rows(mcresults)
   
   
@@ -189,7 +190,7 @@ fin_script <- function(){
   
   lapp_res <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
                        FUN=function(i) predictor_hour(df_total, i),
-                       mc.cores = numCores,
+                       mc.cores = 1,
                        ignore.interactive = TRUE)
   
   lapp_res <-bind_rows(lapp_res)
@@ -243,7 +244,7 @@ fin_script <- function(){
   
   
   
-  my_db <- src_snowflakedb(user = "CONNOR_HAZEN",password = "FFg-nvU-83U-nYh" ,account = "system1", 
+  my_db <- src_snowflakedb(user = "CONNOR_HAZEN",password = * ,account = "system1", 
                            opts = list(warehouse = "S1_DS", db = "DATA_SCIENCE",schema = "CONCOURSE"))
   
   

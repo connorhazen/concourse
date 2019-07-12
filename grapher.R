@@ -102,46 +102,53 @@ df_amt2 <- df_round%>%
   arrange(desc(ses),desc(count))
 
 
-num <- 1
+for(x in 1:600){
+  grapher(x)
+}
 
-name1 <- as.character(df_amt2[num,])
+sagrapher <- function(num){
+  name1 <- as.character(df_amt2[num,])
+  
+  
+  
+  df_tester<-df_round%>%
+    filter(as.character(landingContentGroup2) == name1[1] & as.character(country) == name1[2] &
+             as.character(deviceCategory) == name1[3], as.character(operatingSystem) == name1[4])%>%
+    arrange(timestamp)
+  
+  # ggplot(df_tester, aes(x = timestamp))+
+  #   geom_line(aes(y = rps), size =  1.2, color  = "black")+
+  #   scale_x_datetime(minor_breaks  = "1 day")+
+  #   ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50),
+  #                 "\n",name1[2],name1[3],name1[4],  sep = " " ))
+  # 
+  # 
+  # ggplot(df_tester, aes(x = timestamp))+
+  #   geom_line(aes(y = rps, color = "rps"), size =  1.2)+
+  #   geom_line(aes(y = avg, color = "3day"))+
+  #   scale_x_datetime(minor_breaks  = "1 day")+
+  #   scale_colour_manual("",
+  #                       breaks = c("rps", "3day" ),
+  #                       values = c("blue", "black" )) +
+  #   ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50),
+  #                 "\n",name1[2],name1[3],name1[4], "\n", "MAE : ", round(mean(abs(df_tester$resid_f10), na.rm = TRUE),4), sep = " " ))
+  print(
+  ggplot(df_tester, aes(x = timestamp))+
+    geom_line(aes(y = rps, color = "rps"), size =  1.1)+
+    geom_point(aes(y = rps, color = "rps"), size = .6)+
+    geom_line(aes(y = avg, color = "3day"))+
+    geom_line(aes(y = hpred, color = "pred"))+
+    scale_x_datetime(minor_breaks  = "1 day")+
+    scale_colour_manual("", 
+                        breaks = c("rps", "3day", "pred"),
+                        values = c("blue", "red", "black")) +
+    ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50), 
+                  "\n",name1[2],name1[3],name1[4], "\n", "mase comparison: ", round(mase1(df_tester),4), sep = " " ))
+  )
+}
 
 
 
-df_tester<-df_round%>%
-  filter(as.character(landingContentGroup2) == name1[1] & as.character(country) == name1[2] &
-           as.character(deviceCategory) == name1[3], as.character(operatingSystem) == name1[4])%>%
-  arrange(timestamp)
-
-# ggplot(df_tester, aes(x = timestamp))+
-#   geom_line(aes(y = rps), size =  1.2, color  = "black")+
-#   scale_x_datetime(minor_breaks  = "1 day")+
-#   ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50),
-#                 "\n",name1[2],name1[3],name1[4],  sep = " " ))
-# 
-# 
-# ggplot(df_tester, aes(x = timestamp))+
-#   geom_line(aes(y = rps, color = "rps"), size =  1.2)+
-#   geom_line(aes(y = avg, color = "3day"))+
-#   scale_x_datetime(minor_breaks  = "1 day")+
-#   scale_colour_manual("",
-#                       breaks = c("rps", "3day" ),
-#                       values = c("blue", "black" )) +
-#   ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50),
-#                 "\n",name1[2],name1[3],name1[4], "\n", "MAE : ", round(mean(abs(df_tester$resid_f10), na.rm = TRUE),4), sep = " " ))
-
-ggplot(df_tester, aes(x = timestamp))+
-  geom_line(aes(y = rps, color = "rps"), size =  1.1)+
-  geom_point(aes(y = rps, color = "rps"), size = .6)+
-  geom_line(aes(y = avg, color = "3day"))+
-  geom_line(aes(y = hpred, color = "pred"))+
-  scale_x_datetime(minor_breaks  = "1 day")+
-  scale_colour_manual("", 
-                      breaks = c("rps", "3day", "pred"),
-                      values = c("blue", "red", "black")) +
-  ggtitle(paste("campaign: ", substring(name1[1], first = 1,last = 50), 
-                "\n",name1[2],name1[3],name1[4], "\n", "mase comparison: ", round(mase1(df_tester),4), sep = " " ))
-#
 # ggplot(df_tester, aes(x = date))+
 #   geom_line(aes(y = round(rps,2)), size =  1.2)+
 #   geom_line(aes(y = round(avg,2)), color = "blue")+
@@ -205,6 +212,7 @@ for(x in 1:20){
 print(mas_1/count)
 mase2(df_graph)
 
+
 mase2(df_round)
 
 
@@ -263,4 +271,17 @@ mase2 <- function(df_tester){
 # 
 
 # 
+
+
+
+
+ 
+df_smarter <- df_total%>% 
+  group_by(landingContentGroup2, country, deviceCategory, operatingSystem)%>%
+  summarise(ses = sum(ses, na.rm = TRUE))%>%
+  filter(row_number()==1)
+  
+  
+
+
 
