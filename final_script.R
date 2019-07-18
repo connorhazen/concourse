@@ -3,15 +3,18 @@
 
 fin_script <- function(){
   source("~/concourse/pull_script.R")
-  
+ 
   library(dplyr)
-  library(tidyr)
-  library(padr)
-  library(dplyr.snowflakedb)
-  library(parallel)
-  library(pbmcapply)
+  library(imputeTS)
+  library(forecast) 
+  library(xts)
+  library(checkmate)
+  library(data.table)
+  library(lubridate)
+  library(system1)
+  
+ 
 
-  options(dplyr.jdbc.classpath = "~/snowflake_jdbc.jar")
   numCores <- detectCores() # get the number of cores available
   
   
@@ -22,21 +25,18 @@ fin_script <- function(){
   
   # Connection to Snowflake database
   
-  my_db <- src_snowflakedb(user = "CONNOR_HAZEN",password = *, account = "system1",
-                           opts = list(warehouse = "S1_DS", db = "DATA_SCIENCE",schema = "CONCOURSE"))
+  my_db <-  tryCatch(dbr::db_query('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN"', db = 'snowflake'), error = function(e)e)
   
-  
-  
-  
+ 
   
   
   
   # Insures the table is in snowflake, if not it creates a new one
-  if("CONCOURSE_SELL_SIDE_HAZEN" %in% db_list_tables(my_db$con) && FALSE){
+  if(!is(my_db, "error")){
     
     
     # Pull old table
-    df_sf<- tbl(my_db, "CONCOURSE_SELL_SIDE_HAZEN")%>%
+    df_sf<- my_db%>%
       data.frame()%>%
       mutate(date = as.Date(date), timestamp=as.POSIXct(timestamp))%>%
       arrange(desc(date))
@@ -52,13 +52,13 @@ fin_script <- function(){
     
     # Pull New data from concourse
     df_new<-pull_script(days)%>%
-      filter(rev >= .1)
+      filter(rev >= .01)
     
     
     # Combine with snowflake table 
     df_total <- merge(df_sf, df_new, 
                       by = c("timestamp","landingContentGroup2", 
-                             "country", "deviceCategory", "operatingSystem"),
+                             "country", "deviceCategory", "operatingSystem", "date"),
                       all = TRUE)%>%
       mutate(rev = case_when(!is.na(rev.y)~rev.y, 
                              TRUE~rev.x))%>%
@@ -66,8 +66,10 @@ fin_script <- function(){
                              TRUE~ses.x))%>%
       mutate(rps = case_when(rev>0&ses>0~rev/ses,
                              TRUE~as.numeric(NA)))%>%
-      select(date,timestamp, landingContentGroup2, country, deviceCategory, 
+      select(date, timestamp, landingContentGroup2, country, deviceCategory, 
              operatingSystem, ses, rev, rps, hpred, dpred, avg)
+    
+    new_data_hour <- new_data_start
     
   }else{
     
@@ -105,6 +107,7 @@ fin_script <- function(){
   
   
   
+  
   # Recreating concourse 3day moving average, runs over all new data. --------------------------------
   
   
@@ -119,7 +122,7 @@ fin_script <- function(){
   
  
   
-  mcresults <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
+  mcresults <- mclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
                         FUN=function(i) f10_predictor(df_total_day, i),
                         mc.cores = numCores-1)
   mcresults <-bind_rows(mcresults)
@@ -150,7 +153,7 @@ fin_script <- function(){
   source("~/concourse/day_pred.R")
   pred_date <- new_data_start
   
-  mcresults <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
+  mcresults <- mclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
                         FUN=function(i) predictor_day(df_total_day, i),
                         mc.cores = numCores-1)
   mcresults <-bind_rows(mcresults)
@@ -188,10 +191,9 @@ fin_script <- function(){
   
   
   
-  lapp_res <- pbmclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
+  lapp_res <- mclapply(seq(from = pred_date, to = Sys.Date(), by = "day"),
                        FUN=function(i) predictor_hour(df_total, i),
-                       mc.cores = 1,
-                       ignore.interactive = TRUE)
+                       mc.cores = 1)
   
   lapp_res <-bind_rows(lapp_res)
   
