@@ -1,0 +1,45 @@
+  
+ga360:
+  type: service_account
+  project_id: connorhazen-concoursemedia
+  private_key_id: c540e298bfe9a218262b17782f9d9edab559d66e
+  private_key: !aws_kms | 
+    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
+    HFFv3oJu+FKxBmv1XYCP0g328JDXIeZZKA==
+  client_email: connorhazen-system1@connorhazen-concoursemedia.iam.gserviceaccount.com
+  client_id: '109348092587911152080'
+  auth_uri: https://accounts.google.com/o/oauth2/auth
+  token_uri: https://oauth2.googleapis.com/token
+  auth_provider_x509_cert_url: https://www.googleapis.com/oauth2/v1/certs
+  client_x509_cert_url: https://www.googleapis.com/robot/v1/metadata/x509/connorhazen-system1%40connorhazen-concoursemedia.iam.gserviceaccount.com

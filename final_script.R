@@ -796,7 +796,7 @@ predictor_hour <- function(df, current_date) {
 }
 
 
-#' fucntion that runs tbats on campaigns, adapted from system1 fit tbats package
+#' function that runs tbats on campaigns, adapted from system1 fit tbats package
 #' @param df with timestamp, metric, weights
 #' @param current_date date representing "current date" can be used to backtest if set to previous date
 #' @param forecast length of forecast window
