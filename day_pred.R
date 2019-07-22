@@ -1,3 +1,8 @@
+#' Function to run predictions on daily level
+#' @param df data frame must contain date, landingContentGroup2, country, deviceCategory, operatingSystem, ses, rev, rps, dpred, avg
+#' @param current_date date representing "current date" can be used to backtest by setting date in the past
+#' @return data frame containg new dpred predictions
+
 predictor_day <- function(df, current_date) {
 
   

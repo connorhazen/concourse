@@ -1,3 +1,9 @@
+
+
+
+#' Script to accumulate data from analytics 360 and google sheets
+#' @author Connor-Hazen
+#' @param days number of days into past to pull
 pull_script <- function(days){
   
   end.date <- as.character(Sys.Date())
@@ -15,7 +21,7 @@ pull_script <- function(days){
                                          "https://www.googleapis.com/auth/spreadsheets.readonly", 
                                          "https://docs.google.com/feeds"))
   
-  service_token <- gar_auth_service(json_file="Service_client.json")
+  service_token <- gar_auth_service(config="config.yml")
   
   
   
@@ -76,13 +82,49 @@ pull_script <- function(days){
 
 
 
-gar_auth_service <- function(json_file, scope = getOption("googleAuth.scopes.selected")){
+
+
+
+
+
+
+
+#' Create OAuth2 token for google API usage
+#' @author Connor-Hazen
+#' @param config location of config.yaml file - needs to change when I place my creditials in the global config.yml file
+#' @param scope scopes of api acsess. 
+#' This function come from googleAuthR, botor and dbr. It is a combination of various elements. 
+
+gar_auth_service <- function(config, scope = getOption("googleAuth.scopes.selected")){
   
-  stopifnot(file.exists(json_file))
+  id = "ga360"
+  
+  withclass <- function(class) {
+    force(class)
+    function(x) structure(x, class = class)
+  }
+  secrets <- yaml::yaml.load_file(
+    config,
+    ## keep classes
+    handlers = list('aws_kms'       = withclass('aws_kms'),
+                    'aws_kms_file'  = withclass('aws_kms_file'),
+                    'aws_parameter' = withclass('aws_parameter')))
+  
+  
+  ## secrets was loaded in zzz.R at pkg load time
+  hasName(secrets, id) || stop('Secret ', id, ' not found, check the config.yml')
+  
+  
+  secrets <- lapply(secrets[[id]], function(secret) {
+    switch(
+      class(secret),
+      'aws_kms' = botor::kms_decrypt(secret),
+      ## default
+      secret)})
+  
   
   endpoint <- httr::oauth_endpoints("google")
   
-  secrets  <- jsonlite::fromJSON(json_file)
   scope <- paste(scope, collapse=" ")
   
   if(is.null(secrets$private_key)){
@@ -90,12 +132,42 @@ gar_auth_service <- function(json_file, scope = getOption("googleAuth.scopes.sel
          (Service Account Keys, not service account client)")
   }
   
-  google_token <- httr::oauth_service_token(endpoint, secrets, scope)
   
+  trys<-0
+  while(!exists("google_token") & trys <4){
+    
+    trys<-trys+1
+    try(google_token <- httr::oauth_service_token(endpoint, secrets, scope), silent = FALSE)
+  }
+  
+  
+
   return(google_token)
   
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#' Data query to Analytics 360
+#' @author Connor-Hazen
+#' @param start.date_inp query start date as string
+#' @param end.date_inp query end date as string
+#' @param dimensions_inp query dimensions as string
+#' @param metrics_inp query metrics as string
+#' @param filters_inp query filter as string
+#' @param service_token OAuth2 token create by calling gar_auth_service
 
 
 analyticsDB_pull <- function(start.date_inp, end.date_inp, dimensions_inp, metrics_inp, filters_inp, service_token){

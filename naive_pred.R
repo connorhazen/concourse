@@ -1,3 +1,8 @@
+#' Function to run 3day moving average predictions
+#' @param df data frame must contain date, landingContentGroup2, country, deviceCategory, operatingSystem, ses, rev, rps, avg
+#' @param current_date date representing "current date" can be used to backtest by setting date in the past
+#' @return data frame containg new avg predictions
+#' 
 f10_predictor <- function(df, current_date){
   
   df_test <- df%>%
