@@ -1,71 +1,47 @@
 
-#fin script ------------
-
-
 #' This is the script to run predictions and data pulls
 #' @return data frame of concourse RPS with predictions
-fin_script <- function(config_loc){
+#' @param config_loc location of config.yml file
+#' @param spread_id google spreadsheet id for modifiers. 
+fin_script <- function(config_loc, spread_id, view_id){
   
-  library(dplyr)
-  library(imputeTS)
-  library(forecast) 
-  library(xts)
-  library(checkmate)
-  library(data.table)
-  library(lubridate)
-  library(system1)
-  
-  
-  
-  Sys.setenv(TZ='PST8PDT')
- 
-
-  numCores <- detectCores() # get the number of cores available
-  
-  
-  
-  
-  
+  pred_date <- Sys.Date()
   #Pulling and merging data sets ---------------------------------------------------------------------
   
   # Connection to Snowflake database
   
   my_db <-  tryCatch(dbr::db_query(paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" where "DATE" >to_date(\'', Sys.Date()-30,'\')', sep = ""), db = 'snowflake'), error = function(e)e)
   
- 
- 
 
-paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" where "DATE" >to_date("', Sys.Date()-30,'")', sep = "")
-  
   # Insures the table is in snowflake, if not it creates a new one
   if(!is(my_db, "error")){
     
-    
+    #Make names consitent, weird habit of going all uppercase when pushing to snowflake, so I just followed suit....
     names(my_db) <- tolower(names(my_db))
-    # Pull old table
     
+    # make sure table has right date metrics. 
     df_sf<- my_db%>%
       data.frame()%>%
       mutate(date = as.Date(date), timestamp=as.POSIXct(timestamp))%>%
       arrange(desc(date))
     
+    #Most recent date in snowflake, this tells me how much to pull
     new_data_start <- df_sf$date[1]
     
-    # Find number of days to refresh, the +5 is in case modifiers updated
+    # Find number of days to refresh, 
+    # the +5 is in case modifiers updated or data comes in after the fact. 
+    # not the most elegant but should work
     days <- as.numeric(Sys.Date()-new_data_start)+5
+  
+    log_info(paste("Found snowflake table, pulling", days, "days of new data from google analytics"))
     
-    
-    
-    
-    
-    # Pull New data from concourse
-    df_new<-pull_script(days, config_loc)%>%
+    # Pull New data from concourse, ga360
+    df_new<-pull_script(days, config_loc, spread_id, view_id)%>%
       filter(rev >= .01)
     
     names(df_new) <- tolower(names(df_new))
     
-    
-    # Combine with snowflake table 
+    # Combine with snowflake table, fill rev, ses with new pull, recalculate rps. 
     df_total <- merge(df_sf, df_new, 
                       by = c("timestamp","landingcontentgroup2", 
                              "country", "devicecategory", "operatingsystem", "date"),
@@ -78,28 +54,21 @@ paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" wher
                              TRUE~as.numeric(NA)))%>%
       select(date, timestamp, landingcontentgroup2, country, devicecategory, 
              operatingsystem, ses, rev, rps, hpred, dpred, avg)%>%
-      mutate(date = date(timestamp()))
-    
-    new_data_hour <- new_data_start
+      mutate(date = date(timestamp))
     
   }else{
     
     # If no snowflake present, pull maximum amount of data.
-    df_total<-pull_script(40, config_loc)%>%
+    # In case table is deleted.
+    df_total<-pull_script(40, config_loc, spread_id, view_id)%>%
       filter(rev >= .1)%>%
       mutate(rps = case_when(rev>0&ses>0~rev/ses,
                              TRUE~as.numeric(NA)))%>%
       mutate(hpred = as.numeric(NA), dpred = as.numeric(NA), avg = as.numeric(NA))%>%
       arrange(date)
     
-    new_data_start <- df_total$date[1]+1
-    new_data_hour <- df_total$date[1]+18
-    
+    names(df_total) <- tolower(names(df_total))
   }
-  
-  
-  
-  
   
   # This is the table agregated into days not hours
   df_total_day<- df_total%>%
@@ -109,43 +78,51 @@ paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" wher
     mutate(rps = case_when(rev>0&ses>0~rev/ses,
                            TRUE~as.numeric(NA)))
   
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  # Recreating concourse 3day moving average, runs over all new data. 
-  
-  
-  
-  
-  
-  
+  # This table is what dictates which ad sets get predictions. Its based of the concourse current spreadsheet.
+  df_amt <- df_total_day%>%
+    filter(date<pred_date)%>%
+    filter(date>=pred_date-2)%>%
+    filter(ses >= 100)%>%
+    group_by(landingcontentgroup2, country, devicecategory, operatingsystem)%>%
+    summarise(count = n())%>%
+    arrange(desc(count))%>%
+    select(-count)
 
-  pred_date <- new_data_start
-  
- 
-  
- 
-  
-  mcresults <- mclapply(seq(from = pred_date, to = Sys.Date()-1, by = "day"),
-                        FUN=function(i) f10_predictor(df_total_day, i),
-                        mc.cores = numCores-1)
-  mcresults <-bind_rows(mcresults)
   
   
-  df_total_day <- merge(df_total_day, mcresults, 
+  
+  
+  
+  
+  
+  
+  # Recreating concourse 2day moving average, predicts current day
+  log_info("starting naive predictions")
+
+  
+  #This was used for backtesting or if I missed a day
+  #mcresults <- mclapply(seq(from = pred_date, to = Sys.Date()-1, by = "day"),
+  #                      FUN=function(i) f10_predictor(df_total_day, i),
+  #                      mc.cores = numCores-1)
+  #res <- bind_rows(mcresults)
+  
+  res <- df_total_day%>%
+    filter(date<pred_date)%>%
+    filter(date>=pred_date-2)%>%
+    filter(ses>= 100)%>%
+    group_by(landingcontentgroup2, country, devicecategory, operatingsystem)%>%
+    summarise(avg = mean(rps, na.rm = TRUE))%>%
+    mutate(date = pred_date)
+  
+  #Add results to df_total_day
+  df_total_day <- merge(df_total_day, res, 
                         by = c("date","landingcontentgroup2", "country", 
                                "devicecategory", "operatingsystem"), 
                         all = TRUE)%>%
     mutate(avg = case_when(!is.na(avg.y)~avg.y,
                            TRUE~avg.x))%>%
     select(-avg.x, -avg.y)
+
   
   
   
@@ -153,26 +130,58 @@ paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" wher
   
   
   
+  # 12 day expontialy weighted moving average model for today
+  log_info("starting daily predictions")
+
+  # Used for backtesting
+  #mcresults <- mclapply(seq(from = pred_date, to = Sys.Date()-1, by = "day"),
+  #                      FUN=function(i) predictor_day(df_total_day, i),
+  #                      mc.cores = numCores-1)
+  #mcresults <-bind_rows(mcresults)
   
+  # function for lapply to loop over to create 12 day EMA
+  inner_func_day <- function(x){
+    name1<-df_amt[x,]
+    
+    #filter for ad set, pad date for full 12 days
+    df_1<-df_total_day%>%
+      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
+             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)%>%
+      filter(date > pred_date-13, date < pred_date)%>%
+      pad(start_val = pred_date-12, end_val = pred_date-1, interval = "day" )%>%
+      arrange(desc(date))
+    
+    # create weights for EMA
+    weights <- rep(.6,12)^seq(1:12)
+    
+    # add weights to data.frame
+    df_exp <- data.frame(df_1, weights)%>%
+      mutate(rps_adj = rps*weights)%>%
+      filter(!is.na(rps_adj))
+    
+    #calculate prediction
+    dval <- sum(df_exp$rps_adj)/sum(df_exp$weights)
+    
+    if(dval < 0){
+      dval <- 0
+    }
+    
+    return(mutate(name1, dpred = dval))
+    
+  }
   
+  # Call to inner func to make 12 day EMA
+  mcresults <- mclapply(1:nrow(df_amt),
+           FUN=function(i) inner_func_day(i),
+           mc.cores = detectCores() ,
+           mc.cleanup = TRUE,
+           mc.preschedule = FALSE)
   
+  # Bind results into dataframe
+  mcresults <-bind_rows(mcresults)%>%
+    mutate(date = pred_date)
   
-  
-  # 12 day expontialy weighted moving average model over new data 
-  
-  
- 
-  pred_date <- new_data_start
-  
-  mcresults <- mclapply(seq(from = pred_date, to = Sys.Date()-1, by = "day"),
-                        FUN=function(i) predictor_day(df_total_day, i),
-                        mc.cores = numCores-1)
-  mcresults <-bind_rows(mcresults)
-  
-  
- 
-  
-  
+  #Add results to df_total_day
   df_total_day <- merge(df_total_day, mcresults, 
                         by = c("date","landingcontentgroup2", 
                                "country", "devicecategory", "operatingsystem"), 
@@ -194,33 +203,61 @@ paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" wher
   # Tbats on hourly data 
 
   
+  log_info("starting hourly predictions")
+  pred_time <- Sys.time()-12*60*60
   
-  
-  
-  pred_date <- new_data_hour-1
+  #start timer for tbats, just for monitoring
   total_timer <- Sys.time()
   
+  #lapp_res <- mclapply(seq(from = pred_date, to = Sys.Date()-1, by = "day"),
+  #                    FUN=function(i) predictor_hour(df_total, i),
+  #                    mc.cores = 1)
   
+  #lapp_res <-bind_rows(lapp_res)
   
-  lapp_res <- mclapply(seq(from = pred_date, to = Sys.Date()-1, by = "day"),
-                       FUN=function(i) predictor_hour(df_total, i),
-                       mc.cores = 1)
+  #Helper function for lapply
+  inner_func_hour <- function(row){
+    
+    name1<-df_amt[row,]
+    
+    #Filter for ad set
+    df_1<-df_total%>%
+      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
+             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)%>%
+      filter(date > pred_date-31)%>%
+      filter(date < pred_date)%>%
+      arrange(timestamp)%>%
+      select(timestamp, rps, ses)%>%
+      rename(metric = 2, weight = 3)
+    
+    #run tbats
+    df_hour_tbats <-fit_tbats_concourse(df_1,  current_time =  pred_time,  outliers = 'tsoutliers',
+                                        na.impute = 'na.interp')%>%
+      mutate(date = date(timestamp))%>%
+      filter(timestamp >= pred_time)%>%
+      rename(hpred = 2)%>%
+      select(timestamp, hpred, date)%>%
+      mutate(landingcontentgroup2 = name1$landingcontentgroup2 , country = name1$country ,
+             devicecategory = name1$devicecategory, operatingsystem = name1$operatingsystem)%>%
+      select(date, timestamp, landingcontentgroup2, country, devicecategory, operatingsystem, hpred)
+    
+    return(df_hour_tbats)
+    
+  }
+  #loop over helper function for all ad sets in df_amt
+  mcresults <- mclapply(1:nrow(df_amt),
+                        FUN=function(i) inner_func_hour(i),
+                        mc.cores = detectCores(),
+                        mc.cleanup = TRUE,
+                        mc.preschedule = FALSE)
   
-  lapp_res <-bind_rows(lapp_res)
+  #bind list into df
+  res <-bind_rows(mcresults)
   
-  
-  
-  print(Sys.time()-total_timer)
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  df_total <- merge(df_total, lapp_res, 
+  log_info(paste("hour tbats total time = ", Sys.time()-total_timer))
+
+  #Add new predictions to df_total
+  df_total <- merge(df_total, res, 
                     by = c("date","timestamp","landingcontentgroup2", "country", 
                            "devicecategory", "operatingsystem"), 
                     all = TRUE)%>%
@@ -240,6 +277,10 @@ paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" wher
   # Combining day and hourly estimates and pushing to snow flake 
   
   
+  
+  # Merging day and hourly data, if hour prediction is 
+  # negative (which happens if I think the data is too old), then is is replaced 
+  # with the day estimate
   df_total <- merge(select(df_total_day, -ses,-rev, -rps), 
                     df_total, 
                     by = c("date","landingcontentgroup2", "country", 
@@ -251,25 +292,32 @@ paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" wher
                            TRUE~avg.x))%>%
     mutate(hpred = case_when(hpred<=0~dpred,
                              TRUE ~ hpred))%>%
-    mutate(date = date(timestamp()))%>%
     select(date, timestamp, landingcontentgroup2, country, devicecategory, 
            operatingsystem, ses, rev, rps, hpred, dpred, avg)
   
   names(df_total) <- toupper(names(df_total))
   
+  #This is becuase I pull extra data from ga360 in order to replace stale data. 
+  #Might want to change at somepoint, but this way I can svae data but if more comes in, then it gets updated
   delete_date <- new_data_start - 5
    
   
+  log_info("pushing back to snowflake")
+  
+  #Data to push back to snowflake
   df_append <- df_total%>%
     filter(DATE>delete_date)
   
   sf_con <- dbr::db_connect('snowflake')
   
+  #delete rows that might duplicate
   DBI::dbSendStatement(sf_con, paste("delete from DATA_SCIENCE.CONCOURSE.CONCOURSE_SELL_SIDE_HAZEN
                                      where \"DATE\" > to_date('",delete_date, "')" ))
   
+  #Use concourse schema
   DBI::dbSendStatement(sf_con, "use DATA_SCIENCE.CONCOURSE")
   
+  #Append values
   dbr::db_append(db = sf_con, table = "CONCOURSE_SELL_SIDE_HAZEN", df = df_append)
   
   return(df_total)
@@ -277,16 +325,16 @@ paste('select * from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" wher
 }
 
 
-
-
 # Pull script ------------------------------------------------------------------------------------------
 
 #' Script to accumulate data from analytics 360 and google sheets
 #' @author Connor-Hazen
 #' @param days number of days into past to pull
-pull_script <- function(days, config_path){
+#' @param config_path location of config.yaml file for google api token
+#' @param spread_id id of spreadsheet with concourse modifiers.
+pull_script <- function(days, config_loc, spread_id, view_id){
   
-  end.date <- as.character(Sys.Date())
+  end.date <- as.character(Sys.Date()-1)
   start.date <- as.character(Sys.Date()-days)
   
   dimensions = "ga:date,ga:hour,ga:operatingSystem,ga:deviceCategory,ga:country,ga:landingContentGroup2"
@@ -295,7 +343,7 @@ pull_script <- function(days, config_path){
   
   
   #Spredsheet of councourse modifiers, could change
-  speadsheetID = "1jkPloX3qsaWhU9uq7AkUJiGifuMvVIdxot-W5ySJj1M"
+  speadsheetID = spread_id
   
   format = 'csv'
   
@@ -304,11 +352,11 @@ pull_script <- function(days, config_path){
                                          "https://www.googleapis.com/auth/spreadsheets.readonly", 
                                          "https://docs.google.com/feeds"))
   
-  service_token <- gar_auth_service(config=config_path)
+  service_token <- gar_auth_service(config=config_loc)
   
   
   
-  ga.df <- analyticsDB_pull(start.date, end.date, dimensions, metrics, filters, service_token)
+  ga.df <- analyticsDB_pull(start.date, end.date, dimensions, metrics, filters, service_token, view_id)
   
   
   
@@ -344,15 +392,14 @@ pull_script <- function(days, config_path){
   
   
   df_1<-ga.df%>%
-    rename(date_og = date)%>%
-    mutate(date = ymd(date_og))
+    mutate(date = ymd(date))
   
   df_1 <- merge(df_1, fin_sheet_df, by = "date")
   
   
   df_final_keep <- df_1%>%
     mutate(rev1 = adsenseRevenue * AdSense )%>%
-    mutate(timestamp = ymd_h(paste(date_og, hour)))%>%
+    mutate(timestamp = ymd_h(paste(date, hour), tz ='America/Toronto' ))%>%
     mutate(rev2 = dfpRevenue * 1.0)%>%
     mutate(rev3 = backfillRevenue * AdX)%>%
     mutate(rev = (rev1 + rev2 + rev3)*EBDA)%>%
@@ -362,13 +409,6 @@ pull_script <- function(days, config_path){
   return(df_final_keep)
   
 }
-
-
-
-
-
-
-
 
 
 
@@ -416,30 +456,14 @@ gar_auth_service <- function(config, scope = getOption("googleAuth.scopes.select
   }
   
   
-  trys<-0
-  while(!exists("google_token") & trys <4){
-    
-    trys<-trys+1
-    try(google_token <- httr::oauth_service_token(endpoint, secrets, scope), silent = FALSE)
-  }
+ 
+  google_token <- httr::oauth_service_token(endpoint, secrets, scope)
   
   
   
   return(google_token)
   
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -451,355 +475,201 @@ gar_auth_service <- function(config, scope = getOption("googleAuth.scopes.select
 #' @param metrics_inp query metrics as string
 #' @param filters_inp query filter as string
 #' @param service_token OAuth2 token create by calling gar_auth_service
+#' @param view_id view id from analytics360 account
 
 
-analyticsDB_pull <- function(start.date_inp, end.date_inp, dimensions_inp, metrics_inp, filters_inp, service_token){
-  library(RGoogleAnalytics)
+analyticsDB_pull <- function(start.date, end.date, dimensions, metrics, filters, service_token, view_id){
   
-  trys<-0
-  if(exists("view_id_list")){
-    print("shit")
+  query.list <- list("start.date"  = start.date,
+                     "end.date"    = end.date,
+                     "dimensions"  = dimensions,
+                     "metrics"     = metrics,
+                     "segment"     = NULL,
+                     "sort"        = NULL,
+                     "filters"     = filters,
+                     "max.results" = "10000",
+                     "start.index" = "1",
+                     "table.id"    = paste("ga:",view_id, sep = ""),
+                     "access_token" = service_token$credentials$access_token)
+  
+  # Hit One Query
+  message("Getting data starting at row ", query.list$start.index)
+  query.uri <- toURI(query.list)
+  ga.list <- Get_Data_Feed(query.uri)
+  if(is.null(ga.list)){
+    return(NULL)
   }
-  while(!exists("view_id_list")&trys <4){
-    trys<-trys+1
-    try(view_id_list <- GetProfiles(service_token))
-  }
+  # Convert ga.list into a dataframe
   
-  view_id <- view_id_list[[1]]
+  ga.list.df <- data.frame()
+  ga.list.df <- rbind(ga.list.df, do.call(rbind, as.list(ga.list$rows)))
   
+  col.headers <- ga.list$columnHeaders
   
+  # Check if pagination is required
   
-  query.list <- Init(start.date = start.date_inp,
-                     end.date = end.date_inp,
-                     dimensions = dimensions_inp,
-                     metrics = metrics_inp,
-                     table.id = paste("ga:",view_id, sep = ""), 
-                     max.results = 10000, 
-                     filters = filters_inp)
-  
-  ga.query <- QueryBuilder(query.list)
-  if(exists("df_pull_ret")){
+  if (length(ga.list$rows) < ga.list$totalResults) {
+    number.of.pages <- ceiling(ga.list$totalResults / length(ga.list$rows))
     
-    rm(df_pull_ret)
-  }
-  
-  while(!exists("df_pull_ret") & trys <4){
+    # Clamp Number of Pages to 100 in order to enforce upper limit for pagination as 1M rows
+    if (number.of.pages > 100) {
+      number.of.pages <- 100
+      message("too big of query")
+    }
     
-    trys<-trys+1
-    try(df_pull_ret <-GetReportData(ga.query, service_token, paginate_query = TRUE), silent = FALSE)
+    # Call Pagination Function
+    
+    pagenation_loop <- function(i) {
+      
+      dataframe.param <- data.frame()
+      start.index <- (i * as.numeric(query.list$max.results)) + 1
+      message("Getting data starting at row ", start.index)
+      query.list$start.index <- as.character(start.index)
+      query.uri <- toURI(query.list)
+      ga.list <- Get_Data_Feed(query.uri)
+      dataframe.param <- rbind(dataframe.param,
+                               do.call(rbind, as.list(ga.list$rows)))
+      col.headers <- ga.list$columnHeaders
+      return(dataframe.param)
+      
+    }
+    
+    page.df <- mclapply(1:(number.of.pages-1), 
+                        function(i) pagenation_loop(i),
+                        mc.cores = 1,
+                        mc.cleanup = TRUE,
+                        mc.preschedule = FALSE)
+
+    # Collate Results and convert to Dataframe
+    inter.df <- bind_rows(ga.list.df, page.df)
+    final.df <- set_col_names(col.headers, inter.df)
+
+    message("The API returned ", nrow(final.df), " results.")
+    return(final.df)
+  } else {
+    return(set_col_names(col.headers, ga.list.df))
+  } 
+  
+}
+
+#' Function to create uri for api queries
+#' @param query.list list created in analyticsDB_pull
+#' @return uri for query
+
+toURI <- function(query.list){
+  
+  query <- query.list
+  
+  uri <- "https://www.googleapis.com/analytics/v3/data/ga?"
+  for (name in names(query)) {
+    uri.name <- switch(name,
+                       start.date  = "start-date",
+                       end.date    = "end-date",
+                       dimensions  = "dimensions",
+                       metrics     = "metrics",
+                       segment     = "segment",
+                       sort        = "sort",
+                       filters     = "filters",
+                       max.results = "max-results",
+                       start.index = "start-index",
+                       table.id    = "ids",
+                       access_token = "access_token")
+    if (!is.null(query[[name]])) {
+      uri <- paste(uri,
+                   URLencode(uri.name, reserved = TRUE),
+                   "=",
+                   URLencode(query[[name]], reserved = TRUE),
+                   "&",
+                   sep = "",
+                   collapse = "")
+    }
   }
-  if(trys >0){
-    print("got new data")
-  }
-  return(df_pull_ret)
+  # remove the last '&' that joins the query parameters together.
+  uri <- sub("&$", "", uri)
+  # remove any spaces that got added in from bad input.
+  uri <- gsub("\\s", "", uri)
+  return(uri)
 }
 
 
 
+#' Function to sed queries and record errors.
+#' @param query.uri uri returned from toURI
+#' @return list of data or error if bad api request
 
 
-
-
-
-# 3day moving avg ------------------------------------------------------------------------------------------------
-
-
-
-
-#' Function to run 3day moving average predictions
-#' @param df data frame must contain date, landingcontentgroup2, country, devicecategory, operatingsystem, ses, rev, rps, avg
-#' @param current_date date representing "current date" can be used to backtest by setting date in the past
-#' @return data frame containg new avg predictions
-#' 
-f10_predictor <- function(df, current_date){
+Get_Data_Feed <- function(query.uri){
   
-  df_test <- df%>%
-    filter(date<=current_date)%>%
-    filter(date>current_date-3)
+  ga.Data <- GET(query.uri)  
   
-  df_check <- df%>%
-    filter(date == current_date+1, !is.na(avg))%>%
-    data.frame()%>%
-    select(landingcontentgroup2, country, devicecategory, operatingsystem, avg)
+  api.response.list <- content(ga.Data,as="parsed")  
+  check.param <- regexpr("error", api.response.list)
+  if (check.param[1] != -1) {
+    ga.list <- list(code = api.response.list$error$code,
+                    message = api.response.list$error$message)
+  } else {
+    code <- NULL
+    ga.list <- api.response.list
+  }   
   
   
-  
-  df_amt<-df_test%>%
-    filter(ses >= 100)%>%
-    group_by(landingcontentgroup2, country, devicecategory, operatingsystem)%>%
-    summarise(count = n(), ses = sum(ses, na.rm = TRUE))%>%
-    mutate(avg = as.numeric(NA))%>%
-    data.frame()%>%
-    mutate(date = current_date+1)
-  
-  
-  
-  
-  
-  for(x in 1:length(df_amt$count)){
-    
-    
-    
-    name1<-df_amt[x,]
-    
-    df_filt<-df_check%>%
-      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
-             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)
-    
-    if(nrow(df_filt)>0){
-      df_amt<-df_amt%>%
-        mutate(avg = case_when(landingcontentgroup2 == name1$landingcontentgroup2 & country == name1$country &
-                                 devicecategory == name1$devicecategory & operatingsystem == name1$operatingsystem~df_filt$avg[1],
-                               TRUE ~ avg))
-      
-      next
-    }
-    
-    df_mean <- df_test%>%
-      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
-             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)
-    
-    d3_ma <- mean(df_mean$rps, na.rm = TRUE)
-    
-    if(is.nan(d3_ma)){
-      print("WTF")
-      d3_ma <-0
-    }
-    
-    df_amt<-df_amt%>%
-      mutate(avg = case_when(landingcontentgroup2 == name1$landingcontentgroup2 & country == name1$country &
-                               devicecategory == name1$devicecategory & operatingsystem == name1$operatingsystem~d3_ma,
-                             TRUE ~ avg))
-    
+  if (!is.null( ga.list$code)) {
+    stop(paste("code :",
+               ga.list$code,
+               "Reason :",
+               ga.list$message))
   }
-  df_amt<-df_amt%>%
-    select(date, landingcontentgroup2, devicecategory, operatingsystem, country, avg)
+  if (is.null(ga.list$rows)) {
+    warning("Your query matched 0 results. Please verify your query using the Query Feed Explorer and re-run it.")
+    return(NULL)
+    # break
+  } else {
+    return (ga.list)
+  }
+}
+
+#' Sets data frame column names and data types. 
+#' @param ga.list.param.columnHeaders list of column headers and types. 
+#' @param dataframe.param data frame to change types
+set_col_names <- function(ga.list.param.columnHeaders, dataframe.param){
   
-  return(df_amt)
+  
+  column.param <- t(sapply(ga.list.param.columnHeaders, 
+                           '[',
+                           1 : max(sapply(ga.list.param.columnHeaders,
+                                          length))))
+  col.name <- gsub('ga:', '', as.character(column.param[, 1]))
+  col.datatype <- as.character(column.param[, 3])
+  colnames(dataframe.param) <- col.name
+  
+  dataframe.param <- as.data.frame(dataframe.param)
+  
+  
+  
+  for(i in 1:length(col.datatype)) {
+    if (col.datatype[i] == "STRING") {
+      dataframe.param[, i] <- as.character(dataframe.param[, i]) 
+    } else {
+      dataframe.param[, i] <- as.numeric(as.character(dataframe.param[, i])) 
+    }
+  }
+  return(dataframe.param)
+
 }
 
 
 
+# TBATS Predictions ------------------------------------------------------------------------------------
 
-
-# daily prediction -----------------------------------------------------------------------------------------------
-
-
-
-#' Function to run predictions on daily level
-#' @param df data frame must contain date, landingcontentgroup2, country, devicecategory, operatingsystem, ses, rev, rps, dpred, avg
-#' @param current_date date representing "current date" can be used to backtest by setting date in the past
-#' @return data frame containg new dpred predictions
-
-predictor_day <- function(df, current_date) {
-  
-  
-  df_test <- df%>%
-    filter(date<=current_date)%>%
-    filter(date>current_date-3)
-  
-  df_check <- df%>%
-    filter(date == current_date+1, !is.na(dpred))%>%
-    select(landingcontentgroup2, country, devicecategory, operatingsystem, dpred)
-  
-  
-  
-  df_amt<-df_test%>%
-    filter(ses >= 100)%>%
-    group_by(landingcontentgroup2, country, devicecategory, operatingsystem)%>%
-    summarise(count = n(), ses = sum(ses, na.rm = TRUE))%>%
-    mutate(date = current_date+1)%>%
-    mutate(dpred = as.numeric(NA))
-  
-
-  
-  
-  for(x in 1:nrow(df_amt)){
-    
-    
-    
-    
-    name1<-df_amt[x,]
-    
-    df_filt<-df_check%>%
-      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
-             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)
-    
-    if(nrow(df_filt)>0){
-      df_amt<-df_amt%>%
-        mutate(avg = case_when(landingcontentgroup2 == name1$landingcontentgroup2 & country == name1$country &
-                                 devicecategory == name1$devicecategory & operatingsystem == name1$operatingsystem~df_filt$dpred[1],
-                               TRUE ~ dpred))
-      next
-    }
-    
-    
-    
-    
-    df_1<-df%>%
-      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
-             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)%>%
-      filter(date > current_date-12, date <= current_date)%>%
-      pad(start_val = current_date-11, end_val = current_date, interval = "day" )%>%
-      arrange(desc(date))
-    
-    
-    #begin pred
-    
-    weights <- rep(.6,12)^seq(1:12)
-    
-    
-    df_exp <- data.frame(df_1, weights)%>%
-      mutate(rps_adj = rps*weights)%>%
-      filter(!is.na(rps_adj))
-    
-    
-    
-    dval <- sum(df_exp$rps_adj)/sum(df_exp$weights)
-    
-    
-    
-    
-    # dval <- mean(df_1$rps, na.rm = TRUE)
-    # 
-    # df_3d <- df_1%>%
-    #   filter(date > current_date-3)%>%
-    #   filter(date <= current_date)
-    # 
-    # d_avg <- mean(df_3d$rps, na.rm = TRUE)
-    # 
-    # dval <- (d_avg-dval) * .3 + dval
-    
-    
-    if(dval < 0){
-      dval <- 0
-    }
-    
-    
-    
-    
-    df_amt<-df_amt%>%
-      mutate(dpred = case_when(landingcontentgroup2 == name1$landingcontentgroup2 & country == name1$country &
-                                 devicecategory == name1$devicecategory & operatingsystem == name1$operatingsystem~dval,
-                               TRUE ~ dpred))
-    
-    #end pred
-    
-    
-    
-  }
-  
-  df_amt<-df_amt%>%
-    select(date, landingcontentgroup2, devicecategory, operatingsystem, country, dpred)
-  
-  return(df_amt)
-  
-}
-
-
-
-
-#Hourly Predictions ------------------------------------------------------------------------------------
-
-
-
-#' Function to run predictions on hourly level
-#' @param df data frame must contain date, timestamp, landingcontentgroup2, country, devicecategory, operatingsystem, ses, rev, rps hpred, dpred, avg
-#' @param current_date date representing "current date" can be used to backtest by setting date in the past
-#' @return data frame containg new hpred predictions
-predictor_hour <- function(df, current_date) {
-  numCores <- detectCores()-1 # get the number of cores available
-  
-  #system(paste("echo '\n",current_date,"'"))
-  
-  
-  
-  df_amt <- df%>%
-    filter(date<=current_date)%>%
-    filter(date>current_date-3)%>%
-    group_by(date, landingcontentgroup2, country, devicecategory, operatingsystem)%>%
-    summarise(ses = sum(ses, na.rm = TRUE))%>%
-    filter(ses >= 100)%>%
-    group_by(landingcontentgroup2, country, devicecategory, operatingsystem)%>%
-    summarise(count = n(), ses = sum(ses, na.rm = TRUE))%>%
-    arrange(desc(count))
-  
-  
-  
-  df_check <- df%>%
-    filter(date == current_date+1, !is.na(hpred))%>%
-    select(date, timestamp, landingcontentgroup2, country, devicecategory, operatingsystem, hpred)
-  
-  
-  
-  
-  
-  
-  
-  inner_func_hour <- function(row){
-    
-    
-    name1<-df_amt[row,]
-    
-    df_hour_tbats<-df_check%>%
-      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
-             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)%>%
-      select(date, timestamp, landingcontentgroup2, country, devicecategory, operatingsystem, hpred)
-    
-    
-    
-    if(nrow(df_hour_tbats)!=24){
-      
-      df_1<-df%>%
-        filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
-               devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)%>%
-        filter(date > current_date-30)%>%
-        filter(date <= current_date)%>%
-        arrange(timestamp)%>%
-        select(timestamp, rps, ses)%>%
-        rename(metric = 2, weight = 3)
-      
-      
-      
-      
-      df_hour_tbats <-fit_tbats_concourse(df_1, current_date = current_date, forecast = 37)%>%
-        mutate(date = date(timestamp))%>%
-        filter(date == current_date+1)%>%
-        rename(hpred = 2)%>%
-        select(timestamp, hpred, date)%>%
-        mutate(landingcontentgroup2 = name1$landingcontentgroup2 , country = name1$country ,
-               devicecategory = name1$devicecategory, operatingsystem = name1$operatingsystem)%>%
-        select(date, timestamp, landingcontentgroup2, country, devicecategory, operatingsystem, hpred)
-      
-      #end pred
-      
-      
-    }
-    return(df_hour_tbats)
-    
-  }
-  
-  
-  mcresults <- mclapply(1:nrow(df_amt),
-                          FUN=function(i) inner_func_hour(i),
-                          mc.cores = numCores,
-                          mc.cleanup = TRUE,
-                          mc.preschedule = FALSE)
-  
-  
-  mcresults <-bind_rows(mcresults)
-  
-  
-  
-  return(mcresults)
-  
-}
 
 
 #' function that runs tbats on campaigns, adapted from system1 fit tbats package
 #' @param df with timestamp, metric, weights
 #' @param current_date date representing "current date" can be used to backtest if set to previous date
 #' @param forecast length of forecast window
+#' @return data frame with timestamp and prediction
+#' It currently predicted from the last observed data point to 24 hours after runtime. 
+#' This means that when automated, all periods with have a prediction and we can account for the data delays. 
 
 fit_tbats_concourse <- function(df, label, id, extra = list(),
                                 minweight = 0, maxsparsity = 0.25,
@@ -809,7 +679,7 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
                                 forecast = NULL,
                                 outliers = c('tsoutliers', NA),
                                 na.impute = c('na.interp', 'na.kalman'),
-                                current_date = NULL) {
+                                current_time = Sys.time()) {
   
   
   
@@ -850,12 +720,11 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
   
   placeholder <- -1
   
-  if(as.numeric(difftime(as.POSIXct(current_date+1),df[, max(timestamp)], units = c("hours")))>=12){
-    #print(paste("not recent data: ", df[, max(timestamp)]))
-    
-    
-    
-    predf <- data.frame(timestamp = seq(from = as.POSIXct(current_date+1),
+  forecast <- as.numeric(difftime(floor_date(current_time+24*60*60,unit="hour"), max(df$timestamp, na.rm = TRUE), units = c("hours")))
+  #system(paste("echo '\n length",forecast,"'"))
+  #system(paste("echo '\n max",max(df$timestamp, na.rm = TRUE),"'"))
+  if(forecast>60){
+    predf <- data.frame(timestamp = seq(max(df$timestamp, na.rm = TRUE)+60*60,
                                         by = interval,
                                         length.out = forecast),
                         rep(placeholder, forecast))
@@ -865,7 +734,7 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
   
   
   if(difftime( max(df$timestamp, na.rm = TRUE) , min(df$timestamp, na.rm = TRUE), units = c("hours")) < frequency[1] *4){
-    predf <- data.frame(timestamp = seq(from = as.POSIXct(current_date+1),
+    predf <- data.frame(timestamp = seq(max(df$timestamp, na.rm = TRUE)+60*60,
                                         by = interval,
                                         length.out = forecast),
                         rep(placeholder, forecast))
@@ -944,7 +813,7 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
       #   'that we could not fix with aggregation and other tweaks'))
       
       
-      predf <- data.frame(timestamp = seq(from = as.POSIXct(current_date+1),
+      predf <- data.frame(timestamp = seq(max(df$timestamp, na.rm = TRUE)+60*60,
                                           by = interval,
                                           length.out = forecast),
                           rep(placeholder, forecast))
@@ -1005,6 +874,15 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
     return(eval(mc, envir = parent.frame()))
   }
   
+  if(hasName(model, 'seasonal.periods') && length(model$seasonal.periods) < 1){
+    
+    predf <- data.frame(timestamp = seq(max(df$timestamp, na.rm = TRUE)+60*60,
+                                        by = interval,
+                                        length.out = forecast),
+                        rep(placeholder, forecast))
+    return(predf)
+  }
+  
   ## make sure we fail the model on low number of (unique) observations
   if (nrow(na.omit(tsobj)) < frequency[1] | length(unique(na.omit(tsobj))) < 3 ) {
     model <- structure(
@@ -1017,17 +895,20 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
     
     ## bump number of periods to forecast based on the current hour
     forecast_adj <- forecast
+  
+    
     
     preds <- forecast(model, h = forecast_adj)
+    print(preds)
     predf <- as.data.table(preds)
     predp <- predf[['Point Forecast']]
     pred  <- round(head(predp, 1), 2) # nolint
     
-    ## add timestamps to the predictions for JSON array
     
-    predf <- data.frame(timestamp = tail(seq(from = df[, max(timestamp)],
+    ## add timestamps to the predictions for JSON array
+    predf <- data.frame(timestamp = seq(max(df$timestamp, na.rm = TRUE)+60*60,
                                              by = interval,
-                                             length.out = length(predp) + 1), -1),
+                                             length.out = forecast),
                         predf)
     
     
@@ -1037,7 +918,7 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
     
   }else{
     
-    predf <- data.frame(timestamp = seq(from = as.POSIXct(current_date+1),
+    predf <- data.frame(timestamp = seq(max(df$timestamp, na.rm = TRUE)+60*60,
                                         by = interval,
                                         length.out = forecast),
                         rep(placeholder, forecast))
@@ -1051,5 +932,34 @@ fit_tbats_concourse <- function(df, label, id, extra = list(),
   
 }
 
+
+
+library(dplyr)
+library(imputeTS)
+library(forecast) 
+library(xts)
+library(checkmate)
+library(data.table)
+library(lubridate)
+library(logger)
+library(system1)
+
+
+log_layout(layout_glue_colors)
+log_threshold(TRACE)
+
+# Time zone for consitent predictions and timings 
+Sys.setenv(TZ='America/Toronto')
+
+# spreadsheet id for concourse modifiers
+spread_id = "1jkPloX3qsaWhU9uq7AkUJiGifuMvVIdxot-W5ySJj1M"
+
+#location of config.yml file
+config_loc = "~/concourse/config.yml"
+
+#View id for googleAnalytics
+view_id = "101353932"
+
+fin_script(config_loc, spread_id, view_id)
 
 

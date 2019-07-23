@@ -1,9 +1,14 @@
+# 3day moving avg ------------------------------------------------------------------------------------------------
+
+
+
+
 #' Function to run 3day moving average predictions
-#' @param df data frame must contain date, landingContentGroup2, country, deviceCategory, operatingSystem, ses, rev, rps, avg
+#' @param df data frame must contain date, landingcontentgroup2, country, devicecategory, operatingsystem, ses, rev, rps, avg
 #' @param current_date date representing "current date" can be used to backtest by setting date in the past
 #' @return data frame containg new avg predictions
 #' 
-f10_predictor <- function(df, current_date){
+f10_predictor <- function(df, pred_date){
   
   df_test <- df%>%
     filter(date<=current_date)%>%
@@ -12,21 +17,17 @@ f10_predictor <- function(df, current_date){
   df_check <- df%>%
     filter(date == current_date+1, !is.na(avg))%>%
     data.frame()%>%
-    select(landingContentGroup2, country, deviceCategory, operatingSystem, avg)
+    select(landingcontentgroup2, country, devicecategory, operatingsystem, avg)
   
   
   
   df_amt<-df_test%>%
     filter(ses >= 100)%>%
-    group_by(landingContentGroup2, country, deviceCategory, operatingSystem)%>%
+    group_by(landingcontentgroup2, country, devicecategory, operatingsystem)%>%
     summarise(count = n(), ses = sum(ses, na.rm = TRUE))%>%
-    data.frame()
-  
-  df_amt <- merge(df_check, df_amt, by = c("landingContentGroup2", "country", "deviceCategory", "operatingSystem"), all = TRUE)%>%
-    arrange(desc(ses))%>%
+    mutate(avg = as.numeric(NA))%>%
+    data.frame()%>%
     mutate(date = current_date+1)
-  
-  
   
   for(x in 1:length(df_amt$count)){
     
@@ -34,16 +35,24 @@ f10_predictor <- function(df, current_date){
     
     name1<-df_amt[x,]
     
-    df_filt<-df_test%>%
-      filter(landingContentGroup2 == name1$landingContentGroup2 , country == name1$country ,
-             deviceCategory == name1$deviceCategory, operatingSystem == name1$operatingSystem)%>%
-      arrange(date)
+    df_filt<-df_check%>%
+      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
+             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)
     
-    if(!is.na(df_filt$avg)){
+    if(nrow(df_filt)>0){
+      df_amt<-df_amt%>%
+        mutate(avg = case_when(landingcontentgroup2 == name1$landingcontentgroup2 & country == name1$country &
+                                 devicecategory == name1$devicecategory & operatingsystem == name1$operatingsystem~df_filt$avg[1],
+                               TRUE ~ avg))
+      
       next
     }
     
-    d3_ma <- mean(df_filt$rps, na.rm = TRUE)
+    df_mean <- df_test%>%
+      filter(landingcontentgroup2 == name1$landingcontentgroup2 , country == name1$country ,
+             devicecategory == name1$devicecategory, operatingsystem == name1$operatingsystem)
+    
+    d3_ma <- mean(df_mean$rps, na.rm = TRUE)
     
     if(is.nan(d3_ma)){
       print("WTF")
@@ -51,13 +60,15 @@ f10_predictor <- function(df, current_date){
     }
     
     df_amt<-df_amt%>%
-      mutate(avg = case_when(landingContentGroup2 == name1$landingContentGroup2 & country == name1$country &
-                             deviceCategory == name1$deviceCategory & operatingSystem == name1$operatingSystem~d3_ma,
+      mutate(avg = case_when(landingcontentgroup2 == name1$landingcontentgroup2 & country == name1$country &
+                               devicecategory == name1$devicecategory & operatingsystem == name1$operatingsystem~d3_ma,
                              TRUE ~ avg))
     
   }
   df_amt<-df_amt%>%
-    select(date, landingContentGroup2, deviceCategory, operatingSystem, country, avg)
+    select(date, landingcontentgroup2, devicecategory, operatingsystem, country, avg)
   
   return(df_amt)
 }
+
+
