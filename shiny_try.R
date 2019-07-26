@@ -1,12 +1,12 @@
 library(shiny)
 library(shinydashboard)
-library(dplyr.snowflakedb)
-options(dplyr.jdbc.classpath = "~/snowflake_jdbc.jar")
 
-my_db <- src_snowflakedb(user = "CONNOR_HAZEN",password = "FFg-nvU-83U-nYh", account = "system1",
-                         opts = list(warehouse = "S1_DS", db = "DATA_SCIENCE",schema = "CONCOURSE"))
+my_db <-  tryCatch(dbr::db_query(paste('select * 
+                                         from "DATA_SCIENCE"."CONCOURSE"."CONCOURSE_SELL_SIDE_HAZEN" 
+                                         where "DATE" >to_date(\'', Sys.Date()-30,'\')', 
+                                       sep = ""), db = 'snowflake'), error = function(e)e)
 
-
+names(my_db) <- tolower(names(my_db))
 # Pull old table
 df_sf<- tbl(my_db, "CONCOURSE_SELL_SIDE_HAZEN")%>%
   data.frame()%>%
